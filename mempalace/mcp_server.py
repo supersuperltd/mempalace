@@ -27,6 +27,7 @@ from .config import MempalaceConfig
 from .searcher import search_memories
 from .palace_graph import traverse, find_tunnels, graph_stats
 from .knowledge_graph import KnowledgeGraph
+from . import mine_runner
 
 _kg = KnowledgeGraph()
 
@@ -301,6 +302,71 @@ def tool_delete_drawer(drawer_id: str):
         return {"success": True, "drawer_id": drawer_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ==================== MINE ====================
+
+
+def tool_mine(
+    mode: str = "incremental",
+    wait: bool = True,
+    project_dir: str = None,
+    scan_root: str = None,
+):
+    """
+    Mine projects into the palace.
+
+    mode="incremental", wait=True (default): synchronous run, returns full
+        diff (added/unchanged/per-wing) when done. Intended for daily
+        scheduled runs.
+
+    mode="full", wait=False: spawns a detached background process and
+        returns {"status": "spawned", "job_id": ...} immediately. Use
+        mempalace_mine_status(job_id) to poll until done.
+
+    If another mine is already running (lock held), returns
+        {"status": "already_running", "job_id": <active>} without starting
+        a new run.
+
+    project_dir: mine just one folder (must contain mempalace.yaml).
+    scan_root:   auto-discover all mempalace.yaml under this root
+                 (default: ~/Claude). Ignored if project_dir is given.
+    """
+    import uuid as _uuid
+
+    # Default sync/async wiring from mode, but explicit wait wins
+    if mode == "full" and wait is True:
+        # Caller said full but did not override wait — switch to async
+        wait = False
+    if mode == "incremental" and wait is False:
+        # Caller wants async with incremental — allowed, treat as background
+        pass
+
+    if wait:
+        job_id = str(_uuid.uuid4())
+        return mine_runner.run_with_lock(
+            job_id=job_id,
+            mode=mode,
+            project_dir=project_dir,
+            scan_root=scan_root,
+        )
+    else:
+        return mine_runner.spawn_background(
+            mode=mode,
+            project_dir=project_dir,
+            scan_root=scan_root,
+        )
+
+
+def tool_mine_status(job_id: str):
+    """
+    Read the current state of a background mine job by job_id.
+
+    Returns the persisted job dict. If the job is "running" but its
+    heartbeat is older than 5 minutes, status is reported as "stale"
+    (process likely died from sleep/crash/kill).
+    """
+    return mine_runner.read_status(job_id)
 
 
 # ==================== KNOWLEDGE GRAPH ====================
@@ -630,6 +696,58 @@ TOOLS = {
             "required": ["agent_name"],
         },
         "handler": tool_diary_read,
+    },
+    "mempalace_mine": {
+        "description": (
+            "Mine project files into the palace. Two modes: "
+            "mode='incremental' (wait=true default) runs synchronously and returns "
+            "the full diff — added/unchanged drawer counts, per-wing breakdown, duration. "
+            "Intended for the daily scheduled re-mine. "
+            "mode='full' (wait=false default) spawns a detached background job and returns "
+            "{status:'spawned', job_id:...} immediately; poll with mempalace_mine_status. "
+            "If another mine is already running, returns {status:'already_running', job_id:<active>}. "
+            "Pass project_dir to mine one folder, or scan_root (default ~/Claude) to auto-discover all mempalace.yaml targets. "
+            "Both modes are incremental at the storage layer: already-filed files are skipped, never re-mined."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["incremental", "full"],
+                    "description": "incremental (sync, fast daily) or full (async background). Default: incremental.",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "true: block and return diff. false: spawn background job, return job_id. Default follows mode (true for incremental, false for full).",
+                },
+                "project_dir": {
+                    "type": "string",
+                    "description": "Mine exactly one folder (must contain mempalace.yaml). Optional.",
+                },
+                "scan_root": {
+                    "type": "string",
+                    "description": "Auto-discover all mempalace.yaml under this root. Default: ~/Claude. Ignored if project_dir is set.",
+                },
+            },
+        },
+        "handler": tool_mine,
+    },
+    "mempalace_mine_status": {
+        "description": (
+            "Read the state of a background mine job started with mempalace_mine(wait=false). "
+            "Returns status (queued/running/done/failed/stale), started_at/finished_at, heartbeat, "
+            "and the full result dict if status=done. Reports 'stale' when status=running but the "
+            "heartbeat is older than 5 minutes — the mining process likely died (sleep, crash, kill)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "UUID returned by mempalace_mine"},
+            },
+            "required": ["job_id"],
+        },
+        "handler": tool_mine_status,
     },
 }
 
