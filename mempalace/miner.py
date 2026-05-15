@@ -198,25 +198,97 @@ def file_already_mined(collection, source_file: str) -> bool:
         return False
 
 
+def get_filed_mtime(collection, source_file: str) -> float | None:
+    """
+    Return the most recent mtime stored on drawers for this source_file,
+    or None if no drawer carries an mtime field (legacy data, pre-mtime
+    schema). Callers treat None as "unknown, assume unchanged" — they
+    must NOT auto-re-mine legacy drawers, that would create duplicates.
+    """
+    try:
+        r = collection.get(where={"source_file": source_file}, include=["metadatas"])
+    except Exception:
+        return None
+    best = None
+    for meta in r.get("metadatas", []) or []:
+        mt = (meta or {}).get("mtime")
+        if mt is None:
+            continue
+        try:
+            mt = float(mt)
+        except (TypeError, ValueError):
+            continue
+        if best is None or mt > best:
+            best = mt
+    return best
+
+
+def delete_drawers_for_source(collection, source_file: str) -> int:
+    """
+    Remove every drawer with this source_file. Returns the number removed.
+    Used by the updated-mode path (file changed, replace its drawers) and
+    by the deleted-mode path (file removed from disk, prune its drawers).
+    """
+    try:
+        r = collection.get(where={"source_file": source_file})
+    except Exception:
+        return 0
+    ids = r.get("ids", []) or []
+    if not ids:
+        return 0
+    try:
+        collection.delete(ids=ids)
+    except Exception:
+        return 0
+    return len(ids)
+
+
+def wing_source_files(collection, wing: str) -> set[str]:
+    """
+    Return the set of unique source_file values stored under a wing.
+    Backs the orphan-detection pass: anything in this set that no
+    longer exists on disk is an orphan candidate.
+    """
+    try:
+        r = collection.get(where={"wing": wing}, include=["metadatas"])
+    except Exception:
+        return set()
+    out = set()
+    for meta in r.get("metadatas", []) or []:
+        src = (meta or {}).get("source_file", "")
+        if isinstance(src, str) and src:
+            out.add(src)
+    return out
+
+
 def add_drawer(
-    collection, wing: str, room: str, content: str, source_file: str, chunk_index: int, agent: str
+    collection, wing: str, room: str, content: str, source_file: str, chunk_index: int, agent: str,
+    mtime: float | None = None,
 ):
-    """Add one drawer to the palace."""
+    """
+    Add one drawer to the palace.
+
+    mtime: optional file-system mtime (epoch seconds) recorded with the
+        drawer so future mines can detect updated files. Older drawers
+        without this field are treated as 'unknown mtime' and skipped on
+        re-mine (see get_filed_mtime / process_file).
+    """
     drawer_id = f"drawer_{wing}_{room}_{hashlib.md5((source_file + str(chunk_index)).encode()).hexdigest()[:16]}"
+    metadata = {
+        "wing": wing,
+        "room": room,
+        "source_file": source_file,
+        "chunk_index": chunk_index,
+        "added_by": agent,
+        "filed_at": datetime.now().isoformat(),
+    }
+    if mtime is not None:
+        metadata["mtime"] = float(mtime)
     try:
         collection.add(
             documents=[content],
             ids=[drawer_id],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file,
-                    "chunk_index": chunk_index,
-                    "added_by": agent,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
+            metadatas=[metadata],
         )
         return True
     except Exception as e:
@@ -238,29 +310,70 @@ def process_file(
     rooms: list,
     agent: str,
     dry_run: bool,
-) -> int:
-    """Read, chunk, route, and file one file. Returns drawer count."""
+) -> dict:
+    """
+    Read, chunk, route, and file one file. Returns a structured result:
 
-    # Skip if already filed
+        {
+            "status":          "added" | "updated" | "unchanged" | "skipped",
+            "drawers_added":   int,    # new drawers written
+            "drawers_removed": int,    # drawers replaced (only on 'updated')
+            "reason":          str,    # short tag explaining 'skipped' / 'unchanged'
+        }
+
+    Status semantics:
+      added     — first time seen, fresh drawers written
+      updated   — file already filed and file mtime is newer than stored
+                  mtime; old drawers were deleted and replaced with fresh
+                  chunks. drawers_added is the new count, drawers_removed
+                  is what was purged.
+      unchanged — file already filed; either mtime matches stored mtime,
+                  or the drawer has no recorded mtime (legacy schema —
+                  we conservatively skip rather than risk duplicates).
+      skipped   — read error, file too small, or dry-run on a fresh file.
+    """
     source_file = str(filepath)
+
+    try:
+        file_mtime = filepath.stat().st_mtime
+    except OSError:
+        return {"status": "skipped", "drawers_added": 0, "drawers_removed": 0,
+                "reason": "stat_failed"}
+
     if not dry_run and file_already_mined(collection, source_file):
-        return 0
+        stored = get_filed_mtime(collection, source_file)
+        if stored is None:
+            # Legacy drawer without mtime — treat as unchanged to avoid
+            # duplicating content. Future re-mine after mtime fields
+            # backfill will pick up real updates.
+            return {"status": "unchanged", "drawers_added": 0, "drawers_removed": 0,
+                    "reason": "legacy_no_mtime"}
+        if file_mtime <= stored + 0.5:  # 0.5s slack for FS resolution
+            return {"status": "unchanged", "drawers_added": 0, "drawers_removed": 0,
+                    "reason": "mtime_match"}
+        # File is newer → updated path: purge old drawers, re-mine fresh
+        removed = delete_drawers_for_source(collection, source_file)
+    else:
+        removed = 0
 
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
     except Exception:
-        return 0
+        return {"status": "skipped", "drawers_added": 0, "drawers_removed": removed,
+                "reason": "read_failed"}
 
     content = content.strip()
     if len(content) < MIN_CHUNK_SIZE:
-        return 0
+        return {"status": "skipped", "drawers_added": 0, "drawers_removed": removed,
+                "reason": "too_small"}
 
     room = detect_room(filepath, content, rooms, project_path)
     chunks = chunk_text(content, source_file)
 
     if dry_run:
         print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
-        return len(chunks)
+        return {"status": "added", "drawers_added": len(chunks), "drawers_removed": 0,
+                "reason": "dry_run"}
 
     drawers_added = 0
     for chunk in chunks:
@@ -272,11 +385,14 @@ def process_file(
             source_file=source_file,
             chunk_index=chunk["chunk_index"],
             agent=agent,
+            mtime=file_mtime,
         )
         if added:
             drawers_added += 1
 
-    return drawers_added
+    status = "updated" if removed > 0 else "added"
+    return {"status": status, "drawers_added": drawers_added, "drawers_removed": removed,
+            "reason": "mtime_newer" if status == "updated" else "fresh"}
 
 
 # =============================================================================
@@ -353,7 +469,7 @@ def mine(
     room_counts = defaultdict(int)
 
     for i, filepath in enumerate(files, 1):
-        drawers = process_file(
+        result = process_file(
             filepath=filepath,
             project_path=project_path,
             collection=collection,
@@ -362,6 +478,7 @@ def mine(
             agent=agent,
             dry_run=dry_run,
         )
+        drawers = result["drawers_added"]
         if drawers == 0 and not dry_run:
             files_skipped += 1
         else:
@@ -369,7 +486,8 @@ def mine(
             room = detect_room(filepath, "", rooms, project_path)
             room_counts[room] += 1
             if not dry_run:
-                print(f"  ✓ [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
+                tag = result["status"].upper()
+                print(f"  ✓ [{i:4}/{len(files)}] [{tag:9}] {filepath.name[:40]:40} +{drawers}")
 
     print(f"\n{'=' * 55}")
     print("  Done.")

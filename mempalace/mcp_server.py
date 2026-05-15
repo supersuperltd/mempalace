@@ -312,13 +312,14 @@ def tool_mine(
     wait: bool = True,
     project_dir: str = None,
     scan_root: str = None,
+    prune_deleted: bool = False,
 ):
     """
     Mine projects into the palace.
 
     mode="incremental", wait=True (default): synchronous run, returns full
-        diff (added/unchanged/per-wing) when done. Intended for daily
-        scheduled runs.
+        diff (added/updated/unchanged/deleted/orphans_detected/per-wing)
+        when done. Intended for daily scheduled runs.
 
     mode="full", wait=False: spawns a detached background process and
         returns {"status": "spawned", "job_id": ...} immediately. Use
@@ -328,9 +329,22 @@ def tool_mine(
         {"status": "already_running", "job_id": <active>} without starting
         a new run.
 
-    project_dir: mine just one folder (must contain mempalace.yaml).
-    scan_root:   auto-discover all mempalace.yaml under this root
-                 (default: ~/Claude). Ignored if project_dir is given.
+    Diff categories (each is {"files": N, "drawers": N} except unchanged):
+      added     — new files seen, fresh drawers written
+      updated   — file mtime newer than stored mtime, old drawers replaced
+      unchanged — file already filed and mtime matches (or legacy drawer
+                  without mtime — skipped to avoid duplicating)
+      deleted   — drawers for files no longer on disk, REMOVED
+                  (only when prune_deleted=True; otherwise zero)
+      orphans_detected — files in palace but missing on disk; counted
+                         but NOT removed unless prune_deleted=True
+
+    project_dir:   mine just one folder (must contain mempalace.yaml).
+    scan_root:     auto-discover all mempalace.yaml under this root
+                   (default: ~/Claude). Ignored if project_dir is given.
+    prune_deleted: opt-in to actually delete drawers whose source files
+                   are gone. Default False = detect orphans but keep
+                   drawers for safety.
     """
     import uuid as _uuid
 
@@ -349,12 +363,14 @@ def tool_mine(
             mode=mode,
             project_dir=project_dir,
             scan_root=scan_root,
+            prune_deleted=prune_deleted,
         )
     else:
         return mine_runner.spawn_background(
             mode=mode,
             project_dir=project_dir,
             scan_root=scan_root,
+            prune_deleted=prune_deleted,
         )
 
 
@@ -699,15 +715,17 @@ TOOLS = {
     },
     "mempalace_mine": {
         "description": (
-            "Mine project files into the palace. Two modes: "
-            "mode='incremental' (wait=true default) runs synchronously and returns "
-            "the full diff — added/unchanged drawer counts, per-wing breakdown, duration. "
-            "Intended for the daily scheduled re-mine. "
+            "Mine project files into the palace. Returns a structured diff: "
+            "added/updated/unchanged/deleted (each {files,drawers}) plus orphans_detected "
+            "and per-wing breakdown. "
+            "mode='incremental' (wait=true default) runs synchronously. "
             "mode='full' (wait=false default) spawns a detached background job and returns "
-            "{status:'spawned', job_id:...} immediately; poll with mempalace_mine_status. "
+            "{status:'spawned', job_id:...}; poll with mempalace_mine_status. "
             "If another mine is already running, returns {status:'already_running', job_id:<active>}. "
-            "Pass project_dir to mine one folder, or scan_root (default ~/Claude) to auto-discover all mempalace.yaml targets. "
-            "Both modes are incremental at the storage layer: already-filed files are skipped, never re-mined."
+            "Storage layer is mtime-aware: files whose mtime matches the stored value are "
+            "unchanged; newer files trigger an 'updated' replacement (old drawers purged, "
+            "fresh ones written). Files missing on disk are counted as orphans_detected; "
+            "drawers are NOT removed unless prune_deleted=true."
         ),
         "input_schema": {
             "type": "object",
@@ -728,6 +746,10 @@ TOOLS = {
                 "scan_root": {
                     "type": "string",
                     "description": "Auto-discover all mempalace.yaml under this root. Default: ~/Claude. Ignored if project_dir is set.",
+                },
+                "prune_deleted": {
+                    "type": "boolean",
+                    "description": "Opt-in: actually delete drawers whose source files are gone (counted in 'deleted'). Default false = detect orphans but keep drawers.",
                 },
             },
         },

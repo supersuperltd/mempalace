@@ -226,19 +226,32 @@ def discover_targets(scan_root: str = DEFAULT_SCAN_ROOT) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None) -> dict:
+def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None,
+                      prune_deleted: bool = False) -> dict:
     """
-    Mine a single target directory. Returns counts:
+    Mine a single target directory. Returns structured counts:
+
       {
-        "path": str(target),
-        "wing": str,
-        "added": int,           # drawers newly filed
-        "files_processed": int, # files that contributed >=1 drawer
-        "unchanged": int,       # files skipped (already filed / too small / unreadable)
+        "path":  str,
+        "wing":  str,
+        "added":     {"files": int, "drawers": int},   # fresh files
+        "updated":   {"files": int, "drawers": int},   # mtime newer -> replaced
+        "unchanged": {"files": int},                   # mtime match / legacy
+        "deleted":   {"files": int, "drawers": int},   # pruned orphans
+                                                       #  (only when prune_deleted=True)
+        "orphans_detected": int,    # files in palace but missing on disk
+        "orphans_sample":   list,   # up to 5 sample paths
+        "skipped":   {"files": int},
         "files_total": int,
       }
-    Raises on hard failure (missing yaml, etc.). Caller decides whether to
-    accumulate as error or abort.
+
+    prune_deleted: when True, drawers for files no longer on disk are
+        removed (and counted in 'deleted'). When False (default), they
+        are only counted in 'orphans_detected' — preserves the existing
+        "do not delete drawers without explicit opt-in" stance.
+
+    Raises on hard failure (missing yaml, etc.). Caller decides whether
+    to accumulate as error or abort.
     """
     # Late imports keep module load fast for status-only callers
     import yaml
@@ -247,6 +260,8 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None) -> dict:
         READABLE_EXTENSIONS,
         get_collection,
         process_file,
+        wing_source_files,
+        delete_drawers_for_source,
     )
 
     yaml_path = target / "mempalace.yaml"
@@ -275,12 +290,16 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None) -> dict:
 
     collection = get_collection(palace_path)
 
-    added = 0
-    files_processed = 0
-    unchanged = 0
+    added_files = added_drawers = 0
+    updated_files = updated_drawers = 0
+    unchanged_files = 0
+    skipped_files = 0
+    seen_sources: set[str] = set()
+
     for i, filepath in enumerate(files, 1):
+        seen_sources.add(str(filepath))
         try:
-            drawers = process_file(
+            r = process_file(
                 filepath=filepath,
                 project_path=target,
                 collection=collection,
@@ -291,24 +310,58 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None) -> dict:
             )
         except Exception as e:
             logger.warning(f"process_file failed for {filepath}: {e}")
-            unchanged += 1
+            skipped_files += 1
             continue
 
-        if drawers > 0:
-            added += drawers
-            files_processed += 1
+        status = r.get("status", "skipped")
+        if status == "added":
+            added_files += 1
+            added_drawers += r.get("drawers_added", 0)
+        elif status == "updated":
+            updated_files += 1
+            updated_drawers += r.get("drawers_added", 0)
+        elif status == "unchanged":
+            unchanged_files += 1
         else:
-            unchanged += 1
+            skipped_files += 1
 
         if heartbeat_cb and (i % 25 == 0 or i == len(files)):
             heartbeat_cb()
 
+    # Orphan-scan: source_files in the palace under this wing whose
+    # paths sit inside this target tree but were not seen on disk.
+    target_str = str(target.resolve())
+    palace_sources = wing_source_files(collection, wing)
+    orphans: list[str] = []
+    for s in palace_sources:
+        if not isinstance(s, str) or not s:
+            continue
+        # Only consider paths inside this target tree
+        if not (s == target_str or s.startswith(target_str + os.sep)):
+            continue
+        if s in seen_sources:
+            continue
+        if not os.path.exists(s):
+            orphans.append(s)
+
+    deleted_files = deleted_drawers = 0
+    if prune_deleted and orphans:
+        for s in orphans:
+            removed = delete_drawers_for_source(collection, s)
+            if removed > 0:
+                deleted_files += 1
+                deleted_drawers += removed
+
     return {
         "path": str(target),
         "wing": wing,
-        "added": added,
-        "files_processed": files_processed,
-        "unchanged": unchanged,
+        "added":     {"files": added_files,    "drawers": added_drawers},
+        "updated":   {"files": updated_files,  "drawers": updated_drawers},
+        "unchanged": {"files": unchanged_files},
+        "deleted":   {"files": deleted_files,  "drawers": deleted_drawers},
+        "orphans_detected": len(orphans),
+        "orphans_sample":   orphans[:5],
+        "skipped":   {"files": skipped_files},
         "files_total": len(files),
     }
 
@@ -318,10 +371,16 @@ def run_mine(
     scan_root: Optional[str] = None,
     palace_path: Optional[str] = None,
     heartbeat_cb=None,
+    prune_deleted: bool = False,
 ) -> dict:
     """
     Run a mine across one project_dir or all auto-discovered targets under
     scan_root. Returns the structured result dict.
+
+    prune_deleted: when True, drawers for files no longer on disk are
+        deleted and counted in "deleted". When False (default), orphans
+        are detected and counted in "orphans_detected" but drawers are
+        preserved.
 
     Note: callers should hold `mine_lock()` for the duration of this call
     if they need mutual exclusion. This function does not acquire the lock
@@ -341,19 +400,34 @@ def run_mine(
 
     target_results: list[dict] = []
     errors: list[dict] = []
-    wings_agg: dict[str, dict[str, int]] = defaultdict(lambda: {"added": 0, "unchanged": 0, "files_processed": 0})
+    # Per-wing aggregation: {wing: {added_files, added_drawers, updated_files, ...}}
+    wings_agg: dict[str, dict[str, int]] = defaultdict(lambda: {
+        "added_files": 0, "added_drawers": 0,
+        "updated_files": 0, "updated_drawers": 0,
+        "unchanged_files": 0,
+        "deleted_files": 0, "deleted_drawers": 0,
+        "orphans_detected": 0,
+        "skipped_files": 0,
+    })
 
     for t in targets:
         # Suppress miner.process_file's own logging side effects but keep ours.
         try:
             buf = io.StringIO()
             with _redirect_stdout(buf):
-                tr = _mine_one_target(t, palace_path=palace_path, heartbeat_cb=heartbeat_cb)
+                tr = _mine_one_target(t, palace_path=palace_path, heartbeat_cb=heartbeat_cb,
+                                       prune_deleted=prune_deleted)
             target_results.append(tr)
             w = wings_agg[tr["wing"]]
-            w["added"] += tr["added"]
-            w["unchanged"] += tr["unchanged"]
-            w["files_processed"] += tr["files_processed"]
+            w["added_files"]      += tr["added"]["files"]
+            w["added_drawers"]    += tr["added"]["drawers"]
+            w["updated_files"]    += tr["updated"]["files"]
+            w["updated_drawers"]  += tr["updated"]["drawers"]
+            w["unchanged_files"]  += tr["unchanged"]["files"]
+            w["deleted_files"]    += tr["deleted"]["files"]
+            w["deleted_drawers"]  += tr["deleted"]["drawers"]
+            w["orphans_detected"] += tr["orphans_detected"]
+            w["skipped_files"]    += tr["skipped"]["files"]
         except Exception as e:
             errors.append({
                 "path": str(t),
@@ -361,14 +435,18 @@ def run_mine(
                 "traceback": traceback.format_exc(),
             })
 
-    total_added = sum(tr["added"] for tr in target_results)
-    total_unchanged = sum(tr["unchanged"] for tr in target_results)
+    # Top-level totals
+    def _sum(key, sub):
+        return sum(tr[key][sub] for tr in target_results) if target_results else 0
 
     return {
-        "added": total_added,
-        "updated": 0,      # miner does not currently re-mine modified files
-        "deleted": 0,      # miner does not currently prune orphaned drawers
-        "unchanged": total_unchanged,
+        "added":     {"files": _sum("added",     "files"), "drawers": _sum("added",     "drawers")},
+        "updated":   {"files": _sum("updated",   "files"), "drawers": _sum("updated",   "drawers")},
+        "unchanged": {"files": _sum("unchanged", "files")},
+        "deleted":   {"files": _sum("deleted",   "files"), "drawers": _sum("deleted",   "drawers")},
+        "orphans_detected": sum(tr["orphans_detected"] for tr in target_results),
+        "skipped":   {"files": _sum("skipped",   "files")},
+        "prune_deleted": prune_deleted,
         "targets": target_results,
         "wings": dict(wings_agg),
         "duration_seconds": round(time.monotonic() - started, 2),
@@ -400,6 +478,7 @@ def run_with_lock(
     mode: str,
     project_dir: Optional[str] = None,
     scan_root: Optional[str] = None,
+    prune_deleted: bool = False,
 ) -> dict:
     """
     Acquire mine.lock and run a mine end-to-end, persisting state to the job
@@ -429,6 +508,7 @@ def run_with_lock(
                     project_dir=project_dir,
                     scan_root=scan_root,
                     heartbeat_cb=_heartbeat,
+                    prune_deleted=prune_deleted,
                 )
                 _write_job(
                     job_id,
@@ -459,6 +539,7 @@ def spawn_background(
     mode: str,
     project_dir: Optional[str] = None,
     scan_root: Optional[str] = None,
+    prune_deleted: bool = False,
 ) -> dict:
     """
     Spawn a detached subprocess that runs the mine. Returns immediately with
@@ -489,6 +570,8 @@ def spawn_background(
         cmd += ["--project-dir", project_dir]
     if scan_root:
         cmd += ["--scan-root", scan_root]
+    if prune_deleted:
+        cmd += ["--prune-deleted"]
 
     log_fh = open(log_path, "w")
     proc = subprocess.Popen(
@@ -548,6 +631,8 @@ def _cli_main():
     parser.add_argument("--mode", default="full")
     parser.add_argument("--project-dir", default=None)
     parser.add_argument("--scan-root", default=None)
+    parser.add_argument("--prune-deleted", action="store_true",
+                        help="Remove drawers for files no longer on disk")
     args = parser.parse_args()
 
     try:
@@ -556,6 +641,7 @@ def _cli_main():
             mode=args.mode,
             project_dir=args.project_dir,
             scan_root=args.scan_root,
+            prune_deleted=args.prune_deleted,
         )
     except Exception:
         # run_with_lock already persisted the failed status; surface trace to log
