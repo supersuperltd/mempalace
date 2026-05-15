@@ -71,17 +71,15 @@ def build_graph(col=None, config=None):
         wings = sorted(data["wings"])
         if len(wings) >= 2:
             for i, wa in enumerate(wings):
-                for wb in wings[i + 1 :]:
+                for wb in wings[i + 1:]:
                     for hall in data["halls"]:
-                        edges.append(
-                            {
-                                "room": room,
-                                "wing_a": wa,
-                                "wing_b": wb,
-                                "hall": hall,
-                                "count": data["count"],
-                            }
-                        )
+                        edges.append({
+                            "room": room,
+                            "wing_a": wa,
+                            "wing_b": wb,
+                            "hall": hall,
+                            "count": data["count"],
+                        })
 
     # Convert sets to lists for JSON serialization
     nodes = {}
@@ -106,22 +104,17 @@ def traverse(start_room: str, col=None, config=None, max_hops: int = 2):
     nodes, edges = build_graph(col, config)
 
     if start_room not in nodes:
-        return {
-            "error": f"Room '{start_room}' not found",
-            "suggestions": _fuzzy_match(start_room, nodes),
-        }
+        return {"error": f"Room '{start_room}' not found", "suggestions": _fuzzy_match(start_room, nodes)}
 
     start = nodes[start_room]
     visited = {start_room}
-    results = [
-        {
-            "room": start_room,
-            "wings": start["wings"],
-            "halls": start["halls"],
-            "count": start["count"],
-            "hop": 0,
-        }
-    ]
+    results = [{
+        "room": start_room,
+        "wings": start["wings"],
+        "halls": start["halls"],
+        "count": start["count"],
+        "hop": 0,
+    }]
 
     # BFS traversal
     frontier = [(start_room, 0)]
@@ -140,16 +133,14 @@ def traverse(start_room: str, col=None, config=None, max_hops: int = 2):
             shared_wings = current_wings & set(data["wings"])
             if shared_wings:
                 visited.add(room)
-                results.append(
-                    {
-                        "room": room,
-                        "wings": data["wings"],
-                        "halls": data["halls"],
-                        "count": data["count"],
-                        "hop": depth + 1,
-                        "connected_via": sorted(shared_wings),
-                    }
-                )
+                results.append({
+                    "room": room,
+                    "wings": data["wings"],
+                    "halls": data["halls"],
+                    "count": data["count"],
+                    "hop": depth + 1,
+                    "connected_via": sorted(shared_wings),
+                })
                 if depth + 1 < max_hops:
                     frontier.append((room, depth + 1))
 
@@ -176,15 +167,13 @@ def find_tunnels(wing_a: str = None, wing_b: str = None, col=None, config=None):
         if wing_b and wing_b not in wings:
             continue
 
-        tunnels.append(
-            {
-                "room": room,
-                "wings": wings,
-                "halls": data["halls"],
-                "count": data["count"],
-                "recent": data["dates"][-1] if data["dates"] else "",
-            }
-        )
+        tunnels.append({
+            "room": room,
+            "wings": wings,
+            "halls": data["halls"],
+            "count": data["count"],
+            "recent": data["dates"][-1] if data["dates"] else "",
+        })
 
     tunnels.sort(key=lambda x: -x["count"])
     return tunnels[:50]

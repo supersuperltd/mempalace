@@ -334,19 +334,15 @@ def main():
     )
     p_split.add_argument("dir", help="Directory containing transcript files")
     p_split.add_argument(
-        "--output-dir",
-        default=None,
+        "--output-dir", default=None,
         help="Write split files here (default: same directory as source files)",
     )
     p_split.add_argument(
-        "--dry-run",
-        action="store_true",
+        "--dry-run", action="store_true",
         help="Show what would be split without writing files",
     )
     p_split.add_argument(
-        "--min-sessions",
-        type=int,
-        default=2,
+        "--min-sessions", type=int, default=2,
         help="Only split files containing at least N sessions (default: 2)",
     )
 

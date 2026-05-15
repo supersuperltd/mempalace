@@ -263,9 +263,7 @@ def _warn_ambiguous(people: list) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _generate_aaak_bootstrap(
-    people: list, projects: list, wings: list, mode: str, config_dir: Path = None
-):
+def _generate_aaak_bootstrap(people: list, projects: list, wings: list, mode: str, config_dir: Path = None):
     """
     Generate AAAK entity registry + critical facts bootstrap from onboarding data.
     These files teach the AI about the user's world from session one.
@@ -294,6 +292,7 @@ def _generate_aaak_bootstrap(
         name = p["name"]
         code = entity_codes[name]
         rel = p.get("relationship", "")
+        ctx = p.get("context", "")
         registry_lines.append(f"  {code}={name} ({rel})" if rel else f"  {code}={name}")
 
     if projects:
@@ -302,15 +301,13 @@ def _generate_aaak_bootstrap(
             code = proj[:4].upper()
             registry_lines.append(f"  {code}={proj}")
 
-    registry_lines.extend(
-        [
-            "",
-            "## AAAK Quick Reference",
-            "  Symbols: ♡=love ★=importance ⚠=warning →=relationship |=separator",
-            "  Structure: KEY:value | GROUP(details) | entity.attribute",
-            "  Read naturally — expand codes, treat *markers* as emotional context.",
-        ]
-    )
+    registry_lines.extend([
+        "",
+        "## AAAK Quick Reference",
+        "  Symbols: ♡=love ★=importance ⚠=warning →=relationship |=separator",
+        "  Structure: KEY:value | GROUP(details) | entity.attribute",
+        "  Read naturally — expand codes, treat *markers* as emotional context.",
+    ])
 
     (mempalace_dir / "aaak_entities.md").write_text("\n".join(registry_lines))
 
@@ -328,9 +325,7 @@ def _generate_aaak_bootstrap(
         for p in personal_people:
             code = entity_codes[p["name"]]
             rel = p.get("relationship", "")
-            facts_lines.append(
-                f"- **{p['name']}** ({code}) — {rel}" if rel else f"- **{p['name']}** ({code})"
-            )
+            facts_lines.append(f"- **{p['name']}** ({code}) — {rel}" if rel else f"- **{p['name']}** ({code})")
         facts_lines.append("")
 
     if work_people:
@@ -338,9 +333,7 @@ def _generate_aaak_bootstrap(
         for p in work_people:
             code = entity_codes[p["name"]]
             rel = p.get("relationship", "")
-            facts_lines.append(
-                f"- **{p['name']}** ({code}) — {rel}" if rel else f"- **{p['name']}** ({code})"
-            )
+            facts_lines.append(f"- **{p['name']}** ({code}) — {rel}" if rel else f"- **{p['name']}** ({code})")
         facts_lines.append("")
 
     if projects:
@@ -349,15 +342,13 @@ def _generate_aaak_bootstrap(
             facts_lines.append(f"- **{proj}**")
         facts_lines.append("")
 
-    facts_lines.extend(
-        [
-            "## Palace",
-            f"Wings: {', '.join(wings)}",
-            f"Mode: {mode}",
-            "",
-            "*This file will be enriched by palace_facts.py after mining.*",
-        ]
-    )
+    facts_lines.extend([
+        "## Palace",
+        f"Wings: {', '.join(wings)}",
+        f"Mode: {mode}",
+        "",
+        "*This file will be enriched by palace_facts.py after mining.*",
+    ])
 
     (mempalace_dir / "critical_facts.md").write_text("\n".join(facts_lines))
 
@@ -442,9 +433,9 @@ def run_onboarding(
     print(f"  {registry.summary()}")
     print(f"\n  Wings: {', '.join(wings)}")
     print(f"\n  Registry saved to: {registry._path}")
-    print("\n  AAAK entity registry: ~/.mempalace/aaak_entities.md")
-    print("  Critical facts bootstrap: ~/.mempalace/critical_facts.md")
-    print("\n  Your AI will know your world from the first session.")
+    print(f"\n  AAAK entity registry: ~/.mempalace/aaak_entities.md")
+    print(f"  Critical facts bootstrap: ~/.mempalace/critical_facts.md")
+    print(f"\n  Your AI will know your world from the first session.")
     print()
 
     return registry

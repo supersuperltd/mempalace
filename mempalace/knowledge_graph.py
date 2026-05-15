@@ -101,23 +101,16 @@ class KnowledgeGraph:
         conn = self._conn()
         conn.execute(
             "INSERT OR REPLACE INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
-            (eid, name, entity_type, props),
+            (eid, name, entity_type, props)
         )
         conn.commit()
         conn.close()
         return eid
 
-    def add_triple(
-        self,
-        subject: str,
-        predicate: str,
-        obj: str,
-        valid_from: str = None,
-        valid_to: str = None,
-        confidence: float = 1.0,
-        source_closet: str = None,
-        source_file: str = None,
-    ):
+    def add_triple(self, subject: str, predicate: str, obj: str,
+                   valid_from: str = None, valid_to: str = None,
+                   confidence: float = 1.0, source_closet: str = None,
+                   source_file: str = None):
         """
         Add a relationship triple: subject → predicate → object.
 
@@ -132,13 +125,19 @@ class KnowledgeGraph:
 
         # Auto-create entities if they don't exist
         conn = self._conn()
-        conn.execute("INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)", (sub_id, subject))
-        conn.execute("INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)", (obj_id, obj))
+        conn.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)",
+            (sub_id, subject)
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO entities (id, name) VALUES (?, ?)",
+            (obj_id, obj)
+        )
 
         # Check for existing identical triple
         existing = conn.execute(
             "SELECT id FROM triples WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
-            (sub_id, pred, obj_id),
+            (sub_id, pred, obj_id)
         ).fetchone()
 
         if existing:
@@ -150,17 +149,7 @@ class KnowledgeGraph:
         conn.execute(
             """INSERT INTO triples (id, subject, predicate, object, valid_from, valid_to, confidence, source_closet, source_file)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                triple_id,
-                sub_id,
-                pred,
-                obj_id,
-                valid_from,
-                valid_to,
-                confidence,
-                source_closet,
-                source_file,
-            ),
+            (triple_id, sub_id, pred, obj_id, valid_from, valid_to, confidence, source_closet, source_file)
         )
         conn.commit()
         conn.close()
@@ -176,7 +165,7 @@ class KnowledgeGraph:
         conn = self._conn()
         conn.execute(
             "UPDATE triples SET valid_to=? WHERE subject=? AND predicate=? AND object=? AND valid_to IS NULL",
-            (ended, sub_id, pred, obj_id),
+            (ended, sub_id, pred, obj_id)
         )
         conn.commit()
         conn.close()
@@ -202,19 +191,17 @@ class KnowledgeGraph:
                 query += " AND (t.valid_from IS NULL OR t.valid_from <= ?) AND (t.valid_to IS NULL OR t.valid_to >= ?)"
                 params.extend([as_of, as_of])
             for row in conn.execute(query, params).fetchall():
-                results.append(
-                    {
-                        "direction": "outgoing",
-                        "subject": name,
-                        "predicate": row[2],
-                        "object": row[10],  # obj_name
-                        "valid_from": row[4],
-                        "valid_to": row[5],
-                        "confidence": row[6],
-                        "source_closet": row[7],
-                        "current": row[5] is None,
-                    }
-                )
+                results.append({
+                    "direction": "outgoing",
+                    "subject": name,
+                    "predicate": row[2],
+                    "object": row[10],  # obj_name
+                    "valid_from": row[4],
+                    "valid_to": row[5],
+                    "confidence": row[6],
+                    "source_closet": row[7],
+                    "current": row[5] is None,
+                })
 
         if direction in ("incoming", "both"):
             query = "SELECT t.*, e.name as sub_name FROM triples t JOIN entities e ON t.subject = e.id WHERE t.object = ?"
@@ -223,19 +210,17 @@ class KnowledgeGraph:
                 query += " AND (t.valid_from IS NULL OR t.valid_from <= ?) AND (t.valid_to IS NULL OR t.valid_to >= ?)"
                 params.extend([as_of, as_of])
             for row in conn.execute(query, params).fetchall():
-                results.append(
-                    {
-                        "direction": "incoming",
-                        "subject": row[10],  # sub_name
-                        "predicate": row[2],
-                        "object": name,
-                        "valid_from": row[4],
-                        "valid_to": row[5],
-                        "confidence": row[6],
-                        "source_closet": row[7],
-                        "current": row[5] is None,
-                    }
-                )
+                results.append({
+                    "direction": "incoming",
+                    "subject": row[10],  # sub_name
+                    "predicate": row[2],
+                    "object": name,
+                    "valid_from": row[4],
+                    "valid_to": row[5],
+                    "confidence": row[6],
+                    "source_closet": row[7],
+                    "current": row[5] is None,
+                })
 
         conn.close()
         return results
@@ -258,16 +243,14 @@ class KnowledgeGraph:
 
         results = []
         for row in conn.execute(query, params).fetchall():
-            results.append(
-                {
-                    "subject": row[10],
-                    "predicate": pred,
-                    "object": row[11],
-                    "valid_from": row[4],
-                    "valid_to": row[5],
-                    "current": row[5] is None,
-                }
-            )
+            results.append({
+                "subject": row[10],
+                "predicate": pred,
+                "object": row[11],
+                "valid_from": row[4],
+                "valid_to": row[5],
+                "current": row[5] is None,
+            })
         conn.close()
         return results
 
@@ -276,17 +259,14 @@ class KnowledgeGraph:
         conn = self._conn()
         if entity_name:
             eid = self._entity_id(entity_name)
-            rows = conn.execute(
-                """
+            rows = conn.execute("""
                 SELECT t.*, s.name as sub_name, o.name as obj_name
                 FROM triples t
                 JOIN entities s ON t.subject = s.id
                 JOIN entities o ON t.object = o.id
                 WHERE (t.subject = ? OR t.object = ?)
                 ORDER BY t.valid_from ASC NULLS LAST
-            """,
-                (eid, eid),
-            ).fetchall()
+            """, (eid, eid)).fetchall()
         else:
             rows = conn.execute("""
                 SELECT t.*, s.name as sub_name, o.name as obj_name
@@ -298,17 +278,14 @@ class KnowledgeGraph:
             """).fetchall()
 
         conn.close()
-        return [
-            {
-                "subject": r[10],
-                "predicate": r[2],
-                "object": r[11],
-                "valid_from": r[4],
-                "valid_to": r[5],
-                "current": r[5] is None,
-            }
-            for r in rows
-        ]
+        return [{
+            "subject": r[10],
+            "predicate": r[2],
+            "object": r[11],
+            "valid_from": r[4],
+            "valid_to": r[5],
+            "current": r[5] is None,
+        } for r in rows]
 
     # ── Stats ─────────────────────────────────────────────────────────────
 
@@ -318,12 +295,9 @@ class KnowledgeGraph:
         triples = conn.execute("SELECT COUNT(*) FROM triples").fetchone()[0]
         current = conn.execute("SELECT COUNT(*) FROM triples WHERE valid_to IS NULL").fetchone()[0]
         expired = triples - current
-        predicates = [
-            r[0]
-            for r in conn.execute(
-                "SELECT DISTINCT predicate FROM triples ORDER BY predicate"
-            ).fetchall()
-        ]
+        predicates = [r[0] for r in conn.execute(
+            "SELECT DISTINCT predicate FROM triples ORDER BY predicate"
+        ).fetchall()]
         conn.close()
         return {
             "entities": entities,
@@ -343,21 +317,16 @@ class KnowledgeGraph:
         for key, facts in entity_facts.items():
             name = facts.get("full_name", key.capitalize())
             etype = facts.get("type", "person")
-            self.add_entity(
-                name,
-                etype,
-                {
-                    "gender": facts.get("gender", ""),
-                    "birthday": facts.get("birthday", ""),
-                },
-            )
+            self.add_entity(name, etype, {
+                "gender": facts.get("gender", ""),
+                "birthday": facts.get("birthday", ""),
+            })
 
             # Relationships
             parent = facts.get("parent")
             if parent:
-                self.add_triple(
-                    name, "child_of", parent.capitalize(), valid_from=facts.get("birthday")
-                )
+                self.add_triple(name, "child_of", parent.capitalize(),
+                                valid_from=facts.get("birthday"))
 
             partner = facts.get("partner")
             if partner:
@@ -365,12 +334,8 @@ class KnowledgeGraph:
 
             relationship = facts.get("relationship", "")
             if relationship == "daughter":
-                self.add_triple(
-                    name,
-                    "is_child_of",
-                    facts.get("parent", "").capitalize() or name,
-                    valid_from=facts.get("birthday"),
-                )
+                self.add_triple(name, "is_child_of", facts.get("parent", "").capitalize() or name,
+                                valid_from=facts.get("birthday"))
             elif relationship == "husband":
                 self.add_triple(name, "is_partner_of", facts.get("partner", name).capitalize())
             elif relationship == "brother":
@@ -381,4 +346,5 @@ class KnowledgeGraph:
 
             # Interests
             for interest in facts.get("interests", []):
-                self.add_triple(name, "loves", interest.capitalize(), valid_from="2025-01-01")
+                self.add_triple(name, "loves", interest.capitalize(),
+                                valid_from="2025-01-01")

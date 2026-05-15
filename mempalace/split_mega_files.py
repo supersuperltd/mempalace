@@ -26,15 +26,15 @@ import argparse
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
-HOME = Path.home()
-LUMI_DIR = Path(os.environ.get("MEMPALACE_SOURCE_DIR", str(HOME / "Desktop/transcripts")))
+HOME      = Path.home()
+LUMI_DIR  = Path(os.environ.get("MEMPALACE_SOURCE_DIR", str(HOME / "Desktop/transcripts")))
 
 # People we know about (for name detection in content)
 # Loaded from ~/.mempalace/known_names.json if it exists, otherwise generic fallback.
 _KNOWN_NAMES_PATH = HOME / ".mempalace" / "known_names.json"
-
 
 def _load_known_people() -> list:
     """Load known names from config file, falling back to a generic list."""
@@ -48,7 +48,6 @@ def _load_known_people() -> list:
             pass
     # Generic fallback — override by creating ~/.mempalace/known_names.json
     return ["Alice", "Ben", "Riley", "Max", "Sam", "Devon", "Jordan"]
-
 
 KNOWN_PEOPLE = _load_known_people()
 
@@ -70,7 +69,7 @@ def is_true_session_start(lines, idx):
     True session start: 'Claude Code v' header NOT followed by 'Ctrl+E'/'previous messages'
     within the next 6 lines (those are context restores, not new sessions).
     """
-    nearby = "".join(lines[idx : idx + 6])
+    nearby = "".join(lines[idx:idx + 6])
     return "Ctrl+E" not in nearby and "previous messages" not in nearby
 
 
@@ -88,20 +87,13 @@ def extract_timestamp(lines):
     Find the first timestamp line: ⏺ H:MM AM/PM Weekday, Month DD, YYYY
     Returns (datetime_str, iso_str) or (None, None).
     """
-    ts_pattern = re.compile(r"⏺\s+(\d{1,2}:\d{2}\s+[AP]M)\s+\w+,\s+(\w+)\s+(\d{1,2}),\s+(\d{4})")
+    ts_pattern = re.compile(
+        r"⏺\s+(\d{1,2}:\d{2}\s+[AP]M)\s+\w+,\s+(\w+)\s+(\d{1,2}),\s+(\d{4})"
+    )
     months = {
-        "January": "01",
-        "February": "02",
-        "March": "03",
-        "April": "04",
-        "May": "05",
-        "June": "06",
-        "July": "07",
-        "August": "08",
-        "September": "09",
-        "October": "10",
-        "November": "11",
-        "December": "12",
+        "January": "01", "February": "02", "March": "03", "April": "04",
+        "May": "05", "June": "06", "July": "07", "August": "08",
+        "September": "09", "October": "10", "November": "11", "December": "12",
     }
     for line in lines[:50]:
         m = ts_pattern.search(line)
@@ -185,16 +177,16 @@ def split_file(filepath, output_dir, dry_run=False):
             continue  # Skip tiny fragments
 
         ts_human, ts_iso = extract_timestamp(chunk)
-        people = extract_people(chunk)
-        subject = extract_subject(chunk)
+        people   = extract_people(chunk)
+        subject  = extract_subject(chunk)
 
         # Build filename: SOURCESTEM__DATE_TIME_People_subject.txt
         # Source stem prefix prevents collisions when multiple mega-files
         # produce sessions with the same timestamp/people/subject.
-        ts_part = ts_human or f"part{i + 1:02d}"
+        ts_part     = ts_human or f"part{i+1:02d}"
         people_part = "-".join(people[:3]) if people else "unknown"
-        src_stem = re.sub(r"[^\w-]", "_", path.stem)[:40]
-        name = f"{src_stem}__{ts_part}_{people_part}_{subject}.txt"
+        src_stem    = re.sub(r"[^\w-]", "_", path.stem)[:40]
+        name        = f"{src_stem}__{ts_part}_{people_part}_{subject}.txt"
         # Sanitize
         name = re.sub(r"[^\w\.\-]", "_", name)
         name = re.sub(r"_+", "_", name)
@@ -202,7 +194,7 @@ def split_file(filepath, output_dir, dry_run=False):
         out_path = out_dir / name
 
         if dry_run:
-            print(f"  [{i + 1}/{len(boundaries) - 1}] {name}  ({len(chunk)} lines)")
+            print(f"  [{i+1}/{len(boundaries)-1}] {name}  ({len(chunk)} lines)")
         else:
             out_path.write_text("".join(chunk))
             print(f"  ✓ {name}  ({len(chunk)} lines)")
@@ -216,33 +208,19 @@ def main():
     parser = argparse.ArgumentParser(
         description="Split concatenated transcript mega-files into per-session files"
     )
-    parser.add_argument(
-        "--source",
-        type=str,
-        default=None,
-        help="Source directory (default: MEMPALACE_SOURCE_DIR or ~/Desktop/transcripts)",
-    )
-    parser.add_argument(
-        "--output-dir", type=str, default=None, help="Output directory (default: same as source)"
-    )
-    parser.add_argument(
-        "--min-sessions",
-        type=int,
-        default=2,
-        help="Only split files with at least N sessions (default: 2)",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Show what would happen without writing files"
-    )
-    parser.add_argument(
-        "--file",
-        type=str,
-        default=None,
-        help="Split a single specific file instead of scanning dir",
-    )
+    parser.add_argument("--source",       type=str, default=None,
+                        help="Source directory (default: MEMPALACE_SOURCE_DIR or ~/Desktop/transcripts)")
+    parser.add_argument("--output-dir",   type=str, default=None,
+                        help="Output directory (default: same as source)")
+    parser.add_argument("--min-sessions", type=int, default=2,
+                        help="Only split files with at least N sessions (default: 2)")
+    parser.add_argument("--dry-run",      action="store_true",
+                        help="Show what would happen without writing files")
+    parser.add_argument("--file",         type=str, default=None,
+                        help="Split a single specific file instead of scanning dir")
     args = parser.parse_args()
 
-    src_dir = Path(args.source) if args.source else LUMI_DIR
+    src_dir    = Path(args.source) if args.source else LUMI_DIR
     output_dir = args.output_dir or None  # None = same dir as file
 
     if args.file:
@@ -261,13 +239,13 @@ def main():
         print(f"No mega-files found in {src_dir} (min {args.min_sessions} sessions).")
         return
 
-    print(f"\n{'=' * 60}")
+    print(f"\n{'='*60}")
     print(f"  Mega-file splitter — {'DRY RUN' if args.dry_run else 'SPLITTING'}")
-    print(f"{'=' * 60}")
+    print(f"{'='*60}")
     print(f"  Source:      {src_dir}")
     print(f"  Output:      {output_dir or 'same dir as source'}")
     print(f"  Mega-files:  {len(mega_files)}")
-    print(f"{'─' * 60}\n")
+    print(f"{'─'*60}\n")
 
     total_written = 0
     for f, n_sessions in mega_files:
@@ -282,7 +260,7 @@ def main():
         else:
             print()
 
-    print(f"{'─' * 60}")
+    print(f"{'─'*60}")
     if args.dry_run:
         print(f"  DRY RUN — would create {total_written} files from {len(mega_files)} mega-files")
     else:

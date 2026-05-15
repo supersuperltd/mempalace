@@ -26,11 +26,11 @@ from datetime import datetime
 from .config import MempalaceConfig
 from .searcher import search_memories
 from .palace_graph import traverse, find_tunnels, graph_stats
-import chromadb
-
 from .knowledge_graph import KnowledgeGraph
 
 _kg = KnowledgeGraph()
+
+import chromadb
 
 logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
 logger = logging.getLogger("mempalace_mcp")
@@ -312,24 +312,19 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
     return {"entity": entity, "as_of": as_of, "facts": results, "count": len(results)}
 
 
-def tool_kg_add(
-    subject: str, predicate: str, object: str, valid_from: str = None, source_closet: str = None
-):
+def tool_kg_add(subject: str, predicate: str, object: str,
+                valid_from: str = None, source_closet: str = None):
     """Add a relationship to the knowledge graph."""
-    triple_id = _kg.add_triple(
-        subject, predicate, object, valid_from=valid_from, source_closet=source_closet
-    )
-    return {"success": True, "triple_id": triple_id, "fact": f"{subject} → {predicate} → {object}"}
+    triple_id = _kg.add_triple(subject, predicate, object,
+                                valid_from=valid_from, source_closet=source_closet)
+    return {"success": True, "triple_id": triple_id,
+            "fact": f"{subject} → {predicate} → {object}"}
 
 
 def tool_kg_invalidate(subject: str, predicate: str, object: str, ended: str = None):
     """Mark a fact as no longer true (set end date)."""
     _kg.invalidate(subject, predicate, object, ended=ended)
-    return {
-        "success": True,
-        "fact": f"{subject} → {predicate} → {object}",
-        "ended": ended or "today",
-    }
+    return {"success": True, "fact": f"{subject} → {predicate} → {object}", "ended": ended or "today"}
 
 
 def tool_kg_timeline(entity: str = None):
@@ -367,18 +362,16 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
         col.add(
             ids=[entry_id],
             documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
+            metadatas=[{
+                "wing": wing,
+                "room": room,
+                "hall": "hall_diary",
+                "topic": topic,
+                "type": "diary_entry",
+                "agent": agent_name,
+                "filed_at": now.isoformat(),
+                "date": now.strftime("%Y-%m-%d"),
+            }],
         )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
         return {
@@ -414,14 +407,12 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
         # Combine and sort by timestamp
         entries = []
         for doc, meta in zip(results["documents"], results["metadatas"]):
-            entries.append(
-                {
-                    "date": meta.get("date", ""),
-                    "timestamp": meta.get("filed_at", ""),
-                    "topic": meta.get("topic", ""),
-                    "content": doc,
-                }
-            )
+            entries.append({
+                "date": meta.get("date", ""),
+                "timestamp": meta.get("filed_at", ""),
+                "topic": meta.get("topic", ""),
+                "content": doc,
+            })
 
         entries.sort(key=lambda x: x["timestamp"], reverse=True)
         entries = entries[:last_n]
@@ -474,18 +465,9 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "entity": {
-                    "type": "string",
-                    "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')",
-                },
-                "as_of": {
-                    "type": "string",
-                    "description": "Date filter — only facts valid at this date (YYYY-MM-DD, optional)",
-                },
-                "direction": {
-                    "type": "string",
-                    "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)",
-                },
+                "entity": {"type": "string", "description": "Entity to query (e.g. 'Max', 'MyProject', 'Alice')"},
+                "as_of": {"type": "string", "description": "Date filter — only facts valid at this date (YYYY-MM-DD, optional)"},
+                "direction": {"type": "string", "description": "outgoing (entity→?), incoming (?→entity), or both (default: both)"},
             },
             "required": ["entity"],
         },
@@ -497,19 +479,10 @@ TOOLS = {
             "type": "object",
             "properties": {
                 "subject": {"type": "string", "description": "The entity doing/being something"},
-                "predicate": {
-                    "type": "string",
-                    "description": "The relationship type (e.g. 'loves', 'works_on', 'daughter_of')",
-                },
+                "predicate": {"type": "string", "description": "The relationship type (e.g. 'loves', 'works_on', 'daughter_of')"},
                 "object": {"type": "string", "description": "The entity being connected to"},
-                "valid_from": {
-                    "type": "string",
-                    "description": "When this became true (YYYY-MM-DD, optional)",
-                },
-                "source_closet": {
-                    "type": "string",
-                    "description": "Closet ID where this fact appears (optional)",
-                },
+                "valid_from": {"type": "string", "description": "When this became true (YYYY-MM-DD, optional)"},
+                "source_closet": {"type": "string", "description": "Closet ID where this fact appears (optional)"},
             },
             "required": ["subject", "predicate", "object"],
         },
@@ -523,10 +496,7 @@ TOOLS = {
                 "subject": {"type": "string", "description": "Entity"},
                 "predicate": {"type": "string", "description": "Relationship"},
                 "object": {"type": "string", "description": "Connected entity"},
-                "ended": {
-                    "type": "string",
-                    "description": "When it stopped being true (YYYY-MM-DD, default: today)",
-                },
+                "ended": {"type": "string", "description": "When it stopped being true (YYYY-MM-DD, default: today)"},
             },
             "required": ["subject", "predicate", "object"],
         },
@@ -537,10 +507,7 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "entity": {
-                    "type": "string",
-                    "description": "Entity to get timeline for (optional — omit for full timeline)",
-                },
+                "entity": {"type": "string", "description": "Entity to get timeline for (optional — omit for full timeline)"},
             },
         },
         "handler": tool_kg_timeline,
@@ -555,14 +522,8 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "start_room": {
-                    "type": "string",
-                    "description": "Room to start from (e.g. 'chromadb-setup', 'riley-school')",
-                },
-                "max_hops": {
-                    "type": "integer",
-                    "description": "How many connections to follow (default: 2)",
-                },
+                "start_room": {"type": "string", "description": "Room to start from (e.g. 'chromadb-setup', 'riley-school')"},
+                "max_hops": {"type": "integer", "description": "How many connections to follow (default: 2)"},
             },
             "required": ["start_room"],
         },
@@ -650,18 +611,9 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Your name — each agent gets their own diary wing",
-                },
-                "entry": {
-                    "type": "string",
-                    "description": "Your diary entry in AAAK format — compressed, entity-coded, emotion-marked",
-                },
-                "topic": {
-                    "type": "string",
-                    "description": "Topic tag (optional, default: general)",
-                },
+                "agent_name": {"type": "string", "description": "Your name — each agent gets their own diary wing"},
+                "entry": {"type": "string", "description": "Your diary entry in AAAK format — compressed, entity-coded, emotion-marked"},
+                "topic": {"type": "string", "description": "Topic tag (optional, default: general)"},
             },
             "required": ["agent_name", "entry"],
         },
@@ -672,14 +624,8 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "agent_name": {
-                    "type": "string",
-                    "description": "Your name — each agent gets their own diary wing",
-                },
-                "last_n": {
-                    "type": "integer",
-                    "description": "Number of recent entries to read (default: 10)",
-                },
+                "agent_name": {"type": "string", "description": "Your name — each agent gets their own diary wing"},
+                "last_n": {"type": "integer", "description": "Number of recent entries to read (default: 10)"},
             },
             "required": ["agent_name"],
         },
