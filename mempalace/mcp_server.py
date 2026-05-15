@@ -1589,6 +1589,7 @@ def tool_mine(
 def tool_mine_status(job_id: str):
     """Read the current state of a background mine job by job_id."""
     from . import mine_runner
+
     return mine_runner.read_status(job_id)
 
 
