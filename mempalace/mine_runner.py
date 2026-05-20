@@ -214,7 +214,9 @@ def discover_targets(scan_root: str = DEFAULT_SCAN_ROOT) -> list[Path]:
     targets: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
         # Prune heavy / irrelevant dirs in-place
-        dirnames[:] = [d for d in dirnames if d not in DISCOVERY_SKIP_DIRS and not d.startswith(".")]
+        dirnames[:] = [
+            d for d in dirnames if d not in DISCOVERY_SKIP_DIRS and not d.startswith(".")
+        ]
         if "mempalace.yaml" in filenames or "mempal.yaml" in filenames:
             targets.append(Path(dirpath))
             dirnames[:] = []  # project boundary; do not recurse further
@@ -226,8 +228,9 @@ def discover_targets(scan_root: str = DEFAULT_SCAN_ROOT) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None,
-                      prune_deleted: bool = False) -> dict:
+def _mine_one_target(
+    target: Path, palace_path: str, heartbeat_cb=None, prune_deleted: bool = False
+) -> dict:
     """
     Mine a single target directory. Returns structured counts:
 
@@ -281,8 +284,14 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None,
     for dirpath, dirnames, filenames in os.walk(target):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for fn in filenames:
-            if fn in ("mempalace.yaml", "mempalace.yml", "mempal.yaml", "mempal.yml",
-                      ".gitignore", "package-lock.json"):
+            if fn in (
+                "mempalace.yaml",
+                "mempalace.yml",
+                "mempal.yaml",
+                "mempal.yml",
+                ".gitignore",
+                "package-lock.json",
+            ):
                 continue
             p = Path(dirpath) / fn
             if p.suffix.lower() in READABLE_EXTENSIONS:
@@ -314,12 +323,19 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None,
             continue
 
         status = r.get("status", "skipped")
-        if status == "added":
+        drawers_written = r.get("drawers_added", 0)
+        if status in ("added", "updated") and drawers_written == 0:
+            # process_file walked the file but wrote nothing — too small
+            # (< MIN_CHUNK_SIZE), unreadable, or pure idempotent upsert.
+            # Don't inflate added/updated counts when the palace didn't
+            # actually change.
+            skipped_files += 1
+        elif status == "added":
             added_files += 1
-            added_drawers += r.get("drawers_added", 0)
+            added_drawers += drawers_written
         elif status == "updated":
             updated_files += 1
-            updated_drawers += r.get("drawers_added", 0)
+            updated_drawers += drawers_written
         elif status == "unchanged":
             unchanged_files += 1
         else:
@@ -355,13 +371,13 @@ def _mine_one_target(target: Path, palace_path: str, heartbeat_cb=None,
     return {
         "path": str(target),
         "wing": wing,
-        "added":     {"files": added_files,    "drawers": added_drawers},
-        "updated":   {"files": updated_files,  "drawers": updated_drawers},
+        "added": {"files": added_files, "drawers": added_drawers},
+        "updated": {"files": updated_files, "drawers": updated_drawers},
         "unchanged": {"files": unchanged_files},
-        "deleted":   {"files": deleted_files,  "drawers": deleted_drawers},
+        "deleted": {"files": deleted_files, "drawers": deleted_drawers},
         "orphans_detected": len(orphans),
-        "orphans_sample":   orphans[:5],
-        "skipped":   {"files": skipped_files},
+        "orphans_sample": orphans[:5],
+        "skipped": {"files": skipped_files},
         "files_total": len(files),
     }
 
@@ -401,51 +417,62 @@ def run_mine(
     target_results: list[dict] = []
     errors: list[dict] = []
     # Per-wing aggregation: {wing: {added_files, added_drawers, updated_files, ...}}
-    wings_agg: dict[str, dict[str, int]] = defaultdict(lambda: {
-        "added_files": 0, "added_drawers": 0,
-        "updated_files": 0, "updated_drawers": 0,
-        "unchanged_files": 0,
-        "deleted_files": 0, "deleted_drawers": 0,
-        "orphans_detected": 0,
-        "skipped_files": 0,
-    })
+    wings_agg: dict[str, dict[str, int]] = defaultdict(
+        lambda: {
+            "added_files": 0,
+            "added_drawers": 0,
+            "updated_files": 0,
+            "updated_drawers": 0,
+            "unchanged_files": 0,
+            "deleted_files": 0,
+            "deleted_drawers": 0,
+            "orphans_detected": 0,
+            "skipped_files": 0,
+        }
+    )
 
     for t in targets:
         # Suppress miner.process_file's own logging side effects but keep ours.
         try:
             buf = io.StringIO()
             with _redirect_stdout(buf):
-                tr = _mine_one_target(t, palace_path=palace_path, heartbeat_cb=heartbeat_cb,
-                                       prune_deleted=prune_deleted)
+                tr = _mine_one_target(
+                    t,
+                    palace_path=palace_path,
+                    heartbeat_cb=heartbeat_cb,
+                    prune_deleted=prune_deleted,
+                )
             target_results.append(tr)
             w = wings_agg[tr["wing"]]
-            w["added_files"]      += tr["added"]["files"]
-            w["added_drawers"]    += tr["added"]["drawers"]
-            w["updated_files"]    += tr["updated"]["files"]
-            w["updated_drawers"]  += tr["updated"]["drawers"]
-            w["unchanged_files"]  += tr["unchanged"]["files"]
-            w["deleted_files"]    += tr["deleted"]["files"]
-            w["deleted_drawers"]  += tr["deleted"]["drawers"]
+            w["added_files"] += tr["added"]["files"]
+            w["added_drawers"] += tr["added"]["drawers"]
+            w["updated_files"] += tr["updated"]["files"]
+            w["updated_drawers"] += tr["updated"]["drawers"]
+            w["unchanged_files"] += tr["unchanged"]["files"]
+            w["deleted_files"] += tr["deleted"]["files"]
+            w["deleted_drawers"] += tr["deleted"]["drawers"]
             w["orphans_detected"] += tr["orphans_detected"]
-            w["skipped_files"]    += tr["skipped"]["files"]
+            w["skipped_files"] += tr["skipped"]["files"]
         except Exception as e:
-            errors.append({
-                "path": str(t),
-                "error": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc(),
-            })
+            errors.append(
+                {
+                    "path": str(t),
+                    "error": f"{type(e).__name__}: {e}",
+                    "traceback": traceback.format_exc(),
+                }
+            )
 
     # Top-level totals
     def _sum(key, sub):
         return sum(tr[key][sub] for tr in target_results) if target_results else 0
 
     return {
-        "added":     {"files": _sum("added",     "files"), "drawers": _sum("added",     "drawers")},
-        "updated":   {"files": _sum("updated",   "files"), "drawers": _sum("updated",   "drawers")},
+        "added": {"files": _sum("added", "files"), "drawers": _sum("added", "drawers")},
+        "updated": {"files": _sum("updated", "files"), "drawers": _sum("updated", "drawers")},
         "unchanged": {"files": _sum("unchanged", "files")},
-        "deleted":   {"files": _sum("deleted",   "files"), "drawers": _sum("deleted",   "drawers")},
+        "deleted": {"files": _sum("deleted", "files"), "drawers": _sum("deleted", "drawers")},
         "orphans_detected": sum(tr["orphans_detected"] for tr in target_results),
-        "skipped":   {"files": _sum("skipped",   "files")},
+        "skipped": {"files": _sum("skipped", "files")},
         "prune_deleted": prune_deleted,
         "targets": target_results,
         "wings": dict(wings_agg),
@@ -631,8 +658,9 @@ def _cli_main():
     parser.add_argument("--mode", default="full")
     parser.add_argument("--project-dir", default=None)
     parser.add_argument("--scan-root", default=None)
-    parser.add_argument("--prune-deleted", action="store_true",
-                        help="Remove drawers for files no longer on disk")
+    parser.add_argument(
+        "--prune-deleted", action="store_true", help="Remove drawers for files no longer on disk"
+    )
     args = parser.parse_args()
 
     try:
