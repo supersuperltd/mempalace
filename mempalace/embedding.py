@@ -32,6 +32,7 @@ rather than hard-failing — mining must still work on a laptop without CUDA.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -135,6 +136,13 @@ _EMBEDDINGGEMMA_ONNX = "model_quantized.onnx"
 _EMBEDDINGGEMMA_PREFIX = "task: sentence similarity | query: "
 _EMBEDDINGGEMMA_DIM = 384  # Matryoshka truncation — first 384 dims of the 768
 _EMBEDDINGGEMMA_MAX_LEN = 2048
+# Cap docs per ONNX forward pass. encode_batch pads every doc to the longest in
+# the batch (up to MAX_LEN); one 2048-token doc in a large batch explodes the
+# activation tensor — measured ~0.27 GB/doc at 2048 tok, so the rebuild's
+# 1000-doc batch ≈ 270 GB → OOM (2026-06-14 incident). Sub-batching bounds peak
+# memory regardless of the caller's batch size: 16 ≈ 5 GB worst case. Tunable
+# via MEMPALACE_EMBED_SUBBATCH for lower-RAM machines.
+_EMBEDDINGGEMMA_SUBBATCH = max(1, int(os.environ.get("MEMPALACE_EMBED_SUBBATCH", "16")))
 
 
 class EmbeddinggemmaONNX:
@@ -214,17 +222,25 @@ class EmbeddinggemmaONNX:
         self._lazy_load()
         np = self._np
         texts = [_EMBEDDINGGEMMA_PREFIX + t for t in input]
-        encs = self._tokenizer.encode_batch(texts)
-        input_ids = np.asarray([e.ids for e in encs], dtype=np.int64)
-        attention_mask = np.asarray([e.attention_mask for e in encs], dtype=np.int64)
-        outputs = self._session.run(
-            None, {"input_ids": input_ids, "attention_mask": attention_mask}
-        )
-        sent_emb = outputs[self._output_idx][:, :_EMBEDDINGGEMMA_DIM]
-        # L2-normalize so cosine similarity == dot product (matches what the
-        # MTEB methodology assumes; ChromaDB's distance is configured for it).
-        norms = np.linalg.norm(sent_emb, axis=1, keepdims=True) + 1e-12
-        return (sent_emb / norms).tolist()
+        out: list[list[float]] = []
+        # Sub-batch the ONNX inference so peak memory is bounded no matter how
+        # many docs the caller passes (repair's rebuild passes 1000 at once).
+        # Each doc is pooled independently and padding is attention-masked, so
+        # chunking is result-identical to a single forward pass.
+        for start in range(0, len(texts), _EMBEDDINGGEMMA_SUBBATCH):
+            chunk = texts[start : start + _EMBEDDINGGEMMA_SUBBATCH]
+            encs = self._tokenizer.encode_batch(chunk)
+            input_ids = np.asarray([e.ids for e in encs], dtype=np.int64)
+            attention_mask = np.asarray([e.attention_mask for e in encs], dtype=np.int64)
+            outputs = self._session.run(
+                None, {"input_ids": input_ids, "attention_mask": attention_mask}
+            )
+            sent_emb = outputs[self._output_idx][:, :_EMBEDDINGGEMMA_DIM]
+            # L2-normalize so cosine similarity == dot product (matches what the
+            # MTEB methodology assumes; ChromaDB's distance is configured for it).
+            norms = np.linalg.norm(sent_emb, axis=1, keepdims=True) + 1e-12
+            out.extend((sent_emb / norms).tolist())
+        return out
 
     def embed_query(self, input: list[str]) -> list[list[float]]:  # noqa: A002 — ChromaDB EF protocol
         """Embed query documents (ChromaDB EF protocol)."""
